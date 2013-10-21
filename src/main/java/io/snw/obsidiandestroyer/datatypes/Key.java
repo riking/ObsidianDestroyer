@@ -53,7 +53,10 @@ public class Key {
     public int hashCode() {
         final int prime = 31;
         int result = 1;
-        result = prime * result + toLocation().hashCode();
+        result = prime * result + world.hashCode();
+        result = prime * result + x;
+        result = prime * result + y;
+        result = prime * result + z;
         return result;
     }
 }
