@@ -1,8 +1,13 @@
 package io.snw.obsidiandestroyer.managers;
 
+import gnu.trove.list.TIntList;
+import gnu.trove.list.array.TIntArrayList;
+import gnu.trove.map.TIntObjectMap;
+import gnu.trove.map.hash.TIntObjectHashMap;
 import io.snw.obsidiandestroyer.ObsidianDestroyer;
 import io.snw.obsidiandestroyer.datatypes.Key;
 import io.snw.obsidiandestroyer.datatypes.io.ODRFile;
+
 import org.bukkit.Bukkit;
 import org.bukkit.Chunk;
 import org.bukkit.Location;
@@ -11,15 +16,11 @@ import org.bukkit.block.Block;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.logging.Level;
 
 public class ChunkWrapper {
 
-    private ConcurrentMap<Integer, Key> durabilities = new ConcurrentHashMap<Integer, Key>();
+    private TIntObjectMap<Key> durabilities = new TIntObjectHashMap<Key>();
     private final int chunkX, chunkZ;
     private final String world;
     private final File durabilitiesDir;
@@ -53,30 +54,7 @@ public class ChunkWrapper {
      * @return the key from the location
      */
     public Key getKey(Location location) {
-        final int prime = 31;
-        int rep = 1;
-        rep = prime * rep + location.hashCode();
-        return durabilities.get(rep);
-    }
-
-    /**
-     * Gets the durability of a hash representation
-     *
-     * @param representation the hash representation to check
-     * @return the durability of the hash representation
-     */
-    public int getDurability(int representation) {
-        return durabilities.get(representation).durabilityAmount;
-    }
-
-    /**
-     * Gets the durability time of a hash representation
-     *
-     * @param representation the hash representation to check
-     * @return the durability time of the hash representation
-     */
-    public long getDurabilityTime(int representation) {
-        return durabilities.get(representation).durabilityTime;
+        return durabilities.get(Key.chunkPosition(location.getBlockX(), location.getBlockY(), location.getBlockZ()));
     }
 
     /**
@@ -107,7 +85,7 @@ public class ChunkWrapper {
      */
     public void addBlock(int durability, Block block) {
         Key key = new Key(block.getLocation(), durability);
-        durabilities.put(key.hashCode(), key);
+        durabilities.put(key.chunkPosition(), key);
     }
 
     /**
@@ -119,7 +97,7 @@ public class ChunkWrapper {
      */
     public void addBlockTimer(int durability, long time, Block block) {
         Key key = new Key(block.getLocation(), durability, time);
-        durabilities.put(key.hashCode(), key);
+        durabilities.put(key.chunkPosition(), key);
     }
 
     /**
@@ -137,17 +115,7 @@ public class ChunkWrapper {
      * @param location the location to remove
      */
     public void removeKey(Location location) {
-        Key key = new Key(location, 0, 0);
-        durabilities.remove(key.hashCode());
-    }
-
-    /**
-     * Removes a key from the chunk
-     *
-     * @param representation the hash representation to remove
-     */
-    public void removeKey(int representation) {
-        durabilities.remove(representation);
+        durabilities.remove(Key.chunkPosition(location.getBlockX(), location.getBlockY(), location.getBlockZ()));
     }
 
     /**
@@ -164,20 +132,7 @@ public class ChunkWrapper {
      * @return true if the location is found within the chunk
      */
     public boolean contains(Location location) {
-        final int prime = 31;
-        int rep = 1;
-        rep = prime * rep + location.hashCode();
-        return contains(rep);
-    }
-
-    /**
-     * Does the chunk contains this location key
-     *
-     * @param representation the hash representation to check the chunk for
-     * @return true if the hash representation is found within the chunk
-     */
-    public boolean contains(int representation) {
-        return durabilities.containsKey(representation);
+        return durabilities.containsKey(Key.chunkPosition(location.getBlockX(), location.getBlockY(), location.getBlockZ()));
     }
 
     /**
@@ -190,9 +145,9 @@ public class ChunkWrapper {
         File durabilityFile = new File(durabilitiesDir, chunkX + "." + chunkZ + "." + world + ".odr");
         // Used for sane file creation
         boolean noDuraFile = false;
-        if (this.durabilities.size() > 0) {
-            durabilities.remove(expiredDurabilities());
-        }
+
+        cleanExpiredDurabilities();
+
         if (this.durabilities.size() <= 0) {
             if (durabilityFile.exists()) {
                 durabilityFile.delete();
@@ -203,7 +158,8 @@ public class ChunkWrapper {
             ODRFile region = new ODRFile();
             try {
                 region.prepare(durabilityFile, true);
-                for (Key key : durabilities.values()) {
+                for (Object o : durabilities.values()) {
+                    Key key = (Key) o;
                     region.write(key.x, key.y, key.z, key.durabilityAmount, key.durabilityTime);
                 }
                 region.close();
@@ -220,30 +176,33 @@ public class ChunkWrapper {
     }
 
     /**
-     * Gets a list of durability keys that are not worth saving
-     *
-     * @return list of expired durability keys
+     * Clean all durability keys that are effectively 0 and not worth saving
      */
-    private List<Integer> expiredDurabilities() {
-        List<Integer> expiredDurabilities = new ArrayList<Integer>();
-        for (Key key : durabilities.values()) {
+    private void cleanExpiredDurabilities() {
+        TIntList expired = new TIntArrayList();
+        for (int pos : durabilities.keys()) {
+            Key key = durabilities.get(pos);
             if (MaterialManager.getInstance().getDurabilityResetTimerEnabled(key.toLocation().getBlock().getType().name())) {
                 long currentTime = System.currentTimeMillis();
                 if (currentTime > key.durabilityTime) {
                     if (ConfigManager.getInstance().getMaterialsRegenerateOverTime()) {
                         long regenTime = MaterialManager.getInstance().getDurabilityResetTime(key.toLocation().getBlock().getType().name());
-                        int amount = Math.max(1, Math.round((float) (currentTime - key.durabilityTime) / regenTime));
-                        int durability = key.durabilityAmount - amount;
-                        if (durability <= 0) {
-                            expiredDurabilities.add(key.hashCode());
+                        int amount = (int) Math.ceil(((float) (currentTime - key.durabilityTime) / regenTime));
+                        if (amount > 0) {
+                            int durability = key.durabilityAmount - amount;
+                            if (durability <= 0) {
+                                expired.add(pos);
+                            }
                         }
                     } else {
-                        expiredDurabilities.add(key.hashCode());
+                        expired.add(pos);
                     }
                 }
             }
         }
-        return expiredDurabilities;
+        for (int pos : expired.toArray()) {
+            durabilities.remove(pos);
+        }
     }
 
     /**
@@ -289,7 +248,7 @@ public class ChunkWrapper {
                         continue;
                     }
                 }
-                durabilities.put(info.hashCode(), info);
+                durabilities.put(info.chunkPosition(), info);
             }
             region.close();
         } catch (IOException e) {

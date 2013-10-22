@@ -59,4 +59,16 @@ public class Key {
         result = prime * result + z;
         return result;
     }
+
+    public int chunkPosition() {
+        return chunkPosition(x, y, z);
+    }
+
+    /*
+     * Bit format:
+     * 00000000 00000000 YYYYYYYY XXXXZZZZ
+     */
+    public static int chunkPosition(int x, int y, int z) {
+        return ((z & 15)) | ((x & 15) << 4) | ((y & 255) << 8);
+    }
 }
